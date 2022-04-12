@@ -4,6 +4,8 @@ import json
 import http.client
 import webbrowser
 from time import sleep, time
+from codecs import encode
+import urllib.parse
 
 
 class Config:
@@ -15,6 +17,7 @@ class Config:
             self.file = file
             self.user_name = None
             self.client_id = 'V8EkfbxtBi93cAySTVWAecEum4d6pt4J'
+            self.organization_id = 'ad2b217b-d9d0-4cba-9123-2730860082bc'
             self.access_token = None
             self.access_expiry = None
             self.refresh_token = None
@@ -22,6 +25,7 @@ class Config:
             self.file = file
             self.user_name = config_json['user_name']
             self.client_id = config_json['client_id']
+            self.organization_id = config_json['organization_id']
             self.access_token = config_json['access_token']
             self.access_expiry = config_json['access_expiry']
             self.refresh_token = config_json['refresh_token']
@@ -29,6 +33,7 @@ class Config:
     def save(self):
         config_json = {'user_name': self.user_name,
                        'client_id': self.client_id,
+                       'organization_id': self.organization_id,
                        'access_token': self.access_token,
                        'access_expiry': self.access_expiry,
                        'refresh_token': self.refresh_token}
@@ -75,7 +80,9 @@ def get_access_tokens(config, response):
                 res.status == 201]):
             auth_response = json.loads(res.read())
             config.access_token = auth_response['access_token']
-            config.access_expiry = int(time() + auth_response['expires_in'])
+            config.access_expiry = int(time()
+                                       + auth_response['expires_in']
+                                       - 120)
             config.refresh_token = auth_response['refresh_token']
             return
 
@@ -99,7 +106,9 @@ def refresh_access_token(config):
             res.status == 201]):
         response = json.loads(res.read())
         config.access_token = response['access_token']
-        config.access_expiry = int(time() + response['expires_in'])
+        config.access_expiry = int(time()
+                                   + response['expires_in']
+                                   - 120)
     else:
         raise RuntimeError('Error refreshing access code.')
     
@@ -111,7 +120,7 @@ def authorise_device(config):
         get_access_tokens(config, device_code_response)
         config.save()
         print('Setup complete.\n')
-    elif config.access_expiry - 120 < time():
+    elif config.access_expiry < time():
         refresh_access_token(config)
         config.save()
 
@@ -128,7 +137,7 @@ def list_workflows(config):
 def choose_workflow(workflows):
     print('Please choose a workflow.\n')
     for w in workflows:
-        print(f'{workflows.index(w) + 1}.     {w[0]}')
+        print(f'{workflows.index(w) + 1}   {w[0]}')
     
     while True:
         choice = input('\nWorkflow number: ')
@@ -150,11 +159,87 @@ def get_image_list(directories):
     for d in directories:
         for root, dirs, files in os.walk(d):
             for file in files:
-                name, ext = os.path.splitext(file)
+                _, ext = os.path.splitext(file)
                 if ext.casefold() in image_types:
                     images.append(os.path.join(root, file))
 
     return images
+
+def get_mimetype(file):
+    _, ext = os.path.splitext(file)
+    if ext.casefold() == '.png':
+        return 'image/png'
+    else:
+        return 'image/jpeg'
+
+def process_image(config, workflow, file):
+    authorise_device(config)
+    
+    conn = http.client.HTTPSConnection('api.autoretouch.com')
+
+    data = []
+    boundary = 'wL36Yn8afVp8Ag7AmP8qZ0SA4n1v9T'
+    data.append(encode('--' + boundary))
+    data.append(encode('Content-Disposition: form-data; name=file; '
+                       f'filename={os.path.basename(file)}'))
+    data.append(encode(f'Content-Type: {get_mimetype(file)}'))
+    data.append(encode(''))
+
+    with open(file, 'rb') as f:
+        data.append(f.read())
+
+    data.append(encode('--' + boundary + '--'))
+    data.append(encode(''))
+
+    payload = b'\r\n'.join(data)
+    headers = {'User-Agent': config.user_name,
+               'Authorization': f'Bearer {config.access_token}',
+               'Content-type': f'multipart/form-data; boundary={boundary}'}
+    conn.request('POST',
+                 ('/v1/workflow/execution/create'
+                  f'?workflow={workflow}'
+                  f'&organization={config.organization_id}'),
+                 payload, headers)
+    res = conn.getresponse()
+    data = res.read()
+    
+    return data.decode('utf-8')
+
+def get_execution_status(config, execution):
+    authorise_device(config)
+    
+    conn = http.client.HTTPSConnection('api.autoretouch.com')
+    headers = {'User-Agent': config.user_name,
+               'Authorization': f'Bearer {config.access_token}',
+               'Content-Type': 'json'}
+    conn.request('GET',
+                 (f'/v1/workflow/execution/{execution}'
+                  f'?organization={config.organization_id}'),
+                 headers=headers)
+    
+    response = json.loads(conn.getresponse().read())
+    
+    return (response['status'], response['resultPath'])
+
+def download_image(config, result_path, file_path):
+    authorise_device(config)
+    
+    conn = http.client.HTTPSConnection('api.autoretouch.com')
+    formatted_result_path = urllib.parse.quote(result_path)
+    url = f'/v1{formatted_result_path}?organization={config.organization_id}'
+    headers = {'User-Agent': config.user_name,
+               'Authorization': f'Bearer {config.access_token}'}
+    conn.request('GET', url, headers=headers)
+    
+    response = conn.getresponse().read()
+
+    output_dir = os.path.join(os.path.dirname(file_path), 'autoRetouch')
+    if not os.path.exists(output_dir):
+        os.mkdir(output_dir)
+
+    with open(os.path.join(output_dir, os.path.basename(result_path)),
+              'wb') as f:
+        f.write(response)
 
 def main():
     # Obtain directory list and check it's not empty.
@@ -174,35 +259,33 @@ def main():
     # Load config data and authorise device if necessary.
     config = Config('config.json')
     authorise_device(config)
-
+    
     # Present workflows and ask the user to choose one.
     workflow = choose_workflow(list_workflows(config))
-    print(workflow)
 
+    # Execute workflow for each image.
+    print('\n\nUploading images to be processed...')
+    workflow_executions = []
+    for f in files:
+        workflow_executions.append((process_image(config, workflow, f), f))
+        print(f'   {os.path.basename(f)} uploaded.')
+
+    # Iterate over each execution, checking status.
+    print('\nChecking for processed images...')
+    while workflow_executions:
+        for w in workflow_executions:
+            execution_status, execution_url = get_execution_status(config, w[0])
+            if execution_status == 'COMPLETED':
+                download_image(config, execution_url, w[1])
+                print(f'   {os.path.basename(w[1])} downloaded.')
+                workflow_executions.remove(w)
+            elif any([execution_status == 'CREATED',
+                      execution_status == 'ACTIVE']):
+                continue
+            else:
+                print(f'{os.path.basename(w[1])} could not be processed. '
+                      f'Status: {execution_status}')
+                workflow_executions.remove(w)
 
 if __name__ == '__main__':
     main()
-
-'''
-
-Send Client ID > Recieve Device code > [Refresh Token if past expiry]
-> Recieve Access Token
-Store Access Token as environment variable or in config.xml.
-
-Get workflow list > if desired workflow gone, ask user for workflow
-name. If it exists, save as default in config.xml.
-
-Image upload > Recieve image hash.
-
-Create a workflow execution with previously uploaded image.
-
-Workflow execution status.
-
-Download workflow execution result image.
-
-Place in folder like in autocrop.
-
-
-
-'''
-
