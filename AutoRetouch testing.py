@@ -1,8 +1,9 @@
+import os
+import sys
 import json
 import http.client
 import webbrowser
 from time import sleep, time
-import os
 
 
 class Config:
@@ -114,11 +115,70 @@ def authorise_device(config):
         refresh_access_token(config)
         config.save()
 
+def list_workflows(config):
+    conn = http.client.HTTPSConnection('api.autoretouch.com')
+    headers = {'User-Agent': config.user_name,
+               'Authorization': f'Bearer {config.access_token}',
+               'Content-Type': 'json'}
+    conn.request('GET', '/v1/workflow', headers=headers)
+    response = json.loads(conn.getresponse().read())
+
+    return [(i['name'], i['id']) for i in response['entries']]
+
+def choose_workflow(workflows):
+    print('Please choose a workflow.\n')
+    for w in workflows:
+        print(f'{workflows.index(w) + 1}.     {w[0]}')
+    
+    while True:
+        choice = input('\nWorkflow number: ')
+        try:
+            choice = int(choice)
+        except ValueError:
+            print('\nInvalid input. Please try again.')
+        else:
+            if 0 < choice <= len(workflows):
+                break
+            else:
+                print('\nInvalid input. Please try again.')
+
+    return workflows[choice - 1][1]
+
+def get_image_list(directories):
+    images = []
+    image_types = ('.jpg', '.jpeg', '.png')
+    for d in directories:
+        for root, dirs, files in os.walk(d):
+            for file in files:
+                name, ext = os.path.splitext(file)
+                if ext.casefold() in image_types:
+                    images.append(os.path.join(root, file))
+
+    return images
+
 def main():
-    # Load config data.
+    # Obtain directory list and check it's not empty.
+    directories = sys.argv[1:]
+    if not directories:
+        print('Please drag one or more folders onto the app.')
+        sleep(2)
+        return
+    
+    # Produce image file list, recursing through each directory.
+    files = get_image_list(directories)
+    if not files:
+        print('No images detected.')
+        sleep(2)
+        return
+    
+    # Load config data and authorise device if necessary.
     config = Config('config.json')
     authorise_device(config)
-    
+
+    # Present workflows and ask the user to choose one.
+    workflow = choose_workflow(list_workflows(config))
+    print(workflow)
+
 
 if __name__ == '__main__':
     main()
@@ -146,10 +206,3 @@ Place in folder like in autocrop.
 
 '''
 
-
-'''
-
-What's the difference between a workflow and a workflow execution?
-What's a batch?
-
-'''
