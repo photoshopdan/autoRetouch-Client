@@ -272,6 +272,7 @@ def main():
 
     # Iterate over each execution, checking status.
     print('\nChecking for processed images...')
+    failed_executions = []
     while workflow_executions:
         for w in workflow_executions:
             execution_status, execution_url = get_execution_status(config, w[0])
@@ -283,9 +284,14 @@ def main():
                       execution_status == 'ACTIVE']):
                 continue
             else:
-                print(f'{os.path.basename(w[1])} could not be processed. '
-                      f'Status: {execution_status}')
+                failed_executions.append((os.path.basename(w[1]),
+                                          execution_status))
                 workflow_executions.remove(w)
 
+    for f in failed_executions:
+        print(f'   {f[0]} could not be processed. Status: {f[1]}')
+
+    input('\nBatch complete. Press enter to quit.')
+    
 if __name__ == '__main__':
     main()
