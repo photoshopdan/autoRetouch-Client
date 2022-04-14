@@ -6,6 +6,9 @@ import webbrowser
 from time import sleep, time
 from codecs import encode
 import urllib.parse
+import ssl
+
+_context = ssl.create_default_context(cafile='.certifi/cacert.pem')
 
 
 class Config:
@@ -42,7 +45,8 @@ class Config:
 
 
 def get_device_code(config):
-    conn = http.client.HTTPSConnection('auth.autoretouch.com')
+    conn = http.client.HTTPSConnection('auth.autoretouch.com',
+                                       context=_context)
     payload = (f'client_id={config.client_id}'
                '&scope=offline_access'
                '&audience=https://api.autoretouch.com')
@@ -67,7 +71,8 @@ def get_access_tokens(config, response):
 
     seconds_waited = 0
     while seconds_waited < response['expires_in']:
-        conn = http.client.HTTPSConnection('auth.autoretouch.com')
+        conn = http.client.HTTPSConnection('auth.autoretouch.com',
+                                           context=_context)
         payload = ('grant_type=urn:ietf:params:oauth:grant-type:device_code'
                    f'&device_code={response["device_code"]}'
                    f'&client_id={config.client_id}')
@@ -93,7 +98,8 @@ def get_access_tokens(config, response):
                        'seconds.')
 
 def refresh_access_token(config):
-    conn = http.client.HTTPSConnection('auth.autoretouch.com')
+    conn = http.client.HTTPSConnection('auth.autoretouch.com',
+                                       context=_context)
     payload = ('grant_type=refresh_token'
                f'&refresh_token={config.refresh_token}'
                f'&client_id={config.client_id}')
@@ -125,7 +131,8 @@ def authorise_device(config):
         config.save()
 
 def list_workflows(config):
-    conn = http.client.HTTPSConnection('api.autoretouch.com')
+    conn = http.client.HTTPSConnection('api.autoretouch.com',
+                                       context=_context)
     headers = {'User-Agent': config.user_name,
                'Authorization': f'Bearer {config.access_token}',
                'Content-Type': 'json'}
@@ -175,7 +182,8 @@ def get_mimetype(file):
 def process_image(config, workflow, file):
     authorise_device(config)
     
-    conn = http.client.HTTPSConnection('api.autoretouch.com')
+    conn = http.client.HTTPSConnection('api.autoretouch.com',
+                                       context=_context)
 
     data = []
     boundary = 'wL36Yn8afVp8Ag7AmP8qZ0SA4n1v9T'
@@ -208,7 +216,8 @@ def process_image(config, workflow, file):
 def get_execution_status(config, execution):
     authorise_device(config)
     
-    conn = http.client.HTTPSConnection('api.autoretouch.com')
+    conn = http.client.HTTPSConnection('api.autoretouch.com',
+                                       context=_context)
     headers = {'User-Agent': config.user_name,
                'Authorization': f'Bearer {config.access_token}',
                'Content-Type': 'json'}
@@ -224,7 +233,8 @@ def get_execution_status(config, execution):
 def download_image(config, result_path, file_path):
     authorise_device(config)
     
-    conn = http.client.HTTPSConnection('api.autoretouch.com')
+    conn = http.client.HTTPSConnection('api.autoretouch.com',
+                                       context=_context)
     formatted_result_path = urllib.parse.quote(result_path)
     url = f'/v1{formatted_result_path}?organization={config.organization_id}'
     headers = {'User-Agent': config.user_name,
@@ -275,6 +285,7 @@ def main():
     failed_executions = []
     while workflow_executions:
         for w in workflow_executions:
+            sleep(0.2) # Avoid hammering server.
             execution_status, execution_url = get_execution_status(config, w[0])
             if execution_status == 'COMPLETED':
                 download_image(config, execution_url, w[1])
@@ -291,7 +302,7 @@ def main():
     for f in failed_executions:
         print(f'   {f[0]} could not be processed. Status: {f[1]}')
 
-    input('\nBatch complete. Press enter to quit.')
+    input('\n\nBatch complete. Press enter to quit.')
     
 if __name__ == '__main__':
     main()
